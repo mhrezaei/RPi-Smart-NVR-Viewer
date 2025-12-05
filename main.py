@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
 """
-Smart NVR Viewer for Raspberry Pi (Ultimate Tour Edition)
+Smart NVR Viewer for Raspberry Pi (Ultimate Grid Edition)
 ---------------------------------------------------------
 Description:
-    A professional surveillance dashboard for Raspberry Pi.
-    Combines the robustness of the "Professional Edition" with the 
-    multi-view capabilities of the "Tour Edition".
+    A professional surveillance dashboard designed for Raspberry Pi.
+    It overcomes hardware limitations by cycling through cameras in 
+    configurable grid layouts (4, 6, 8, 9, 16).
 
 Features:
-    - 2x2 Grid Layout with Auto-Tour (Cycling).
-    - **LIVE PREVIEW** in Admin Panel for camera selection.
-    - Full System Stats (CPU, RAM, Disk, Temp, Network Latency).
-    - Robust Error Handling & Auto-Recovery.
-    - Aggressive Kiosk Mode (Forces Fullscreen on Boot).
-    - Auto-Prompt for Admin Password if unconfigured.
+    - **Variable Grid Sizes:** Select between 4, 6, 8, 9, or 16 cameras per page.
+    - **Auto-Aspect Ratio:** Forces 16:9 rendering to prevent squashed images.
+    - **Stream Quality Control:** Toggle between Main/Sub streams in Admin Panel.
+    - **Live Preview:** Visual camera selection in Admin Dashboard.
+    - **System Stats:** Real-time monitoring of CPU, RAM, Disk, Temp, Network.
+    - **Robust Error Recovery:** Auto-reconnects on network/stream failure.
 
 Author: Mohammad Hadi Rezaei
 License: MIT
@@ -28,7 +28,7 @@ import subprocess
 import math
 import re
 import tkinter as tk
-from tkinter import simpledialog, messagebox, Toplevel, Label, Entry, Button, Checkbutton, IntVar, Frame, LabelFrame
+from tkinter import simpledialog, messagebox, Toplevel, Label, Entry, Button, IntVar, Frame, LabelFrame, OptionMenu, StringVar
 from datetime import datetime
 
 # ==========================================
@@ -51,23 +51,25 @@ DEFAULT_CONFIG = {
     "nvr_port": "554",
     "nvr_user": "admin",
     "nvr_pass": "admin123",
-    "subtype": "1",           # 1 = Substream (Recommended for Grid View)
+    "subtype": "1",           # 0=Main, 1=Sub (Default 1 for performance)
     "admin_pass": "admin",
     "tour_interval": 10,      # Seconds per page
+    "grid_size": 4,           # Number of cameras per page (4, 6, 8, 9, 16)
     "active_cameras": []      # List of enabled camera IDs
 }
 
 class CameraCell:
     """
-    Represents a single quadrant in the 2x2 grid.
-    Manages its own VLC player instance and error handling.
+    Represents a single video slot in the grid.
+    Manages VLC player and overlay information.
     """
     def __init__(self, parent, vlc_instance):
+        # Using a black frame with a border
         self.frame = tk.Frame(parent, bg="black", bd=1, relief="sunken")
         self.vlc_instance = vlc_instance
         self.player = None
         
-        # Status Text (Center)
+        # Center Status Text (e.g. "Connecting...")
         self.status_label = tk.Label(self.frame, text="", bg="black", fg="white", font=("Arial", 12))
         self.status_label.place(relx=0.5, rely=0.5, anchor="center")
         
@@ -80,7 +82,7 @@ class CameraCell:
         self.stop() # Ensure clean state
         
         self.name_label.config(text=f"CAM {cam_id}")
-        self.status_label.config(text="Connecting...", fg="yellow")
+        self.status_label.config(text="Loading...", fg="yellow")
         self.status_label.lift()
         self.name_label.lift()
         
@@ -97,7 +99,7 @@ class CameraCell:
                 
             self.player.play()
             
-            # Assume success initially; monitor loop will catch failures
+            # Hide loading text (assuming success, background monitor will correct if fails)
             self.status_label.lower() 
             
         except Exception as e:
@@ -144,27 +146,39 @@ class SmartNVRTourApp:
         self.disable_screensaver()
         
         # --- VLC Instance (Shared) ---
-        # Optimized for grid playback
+        # Arguments optimized for Grid View:
+        # --aspect-ratio=16:9 : Forces correct aspect ratio (adds black bars if needed)
+        # --network-caching=300 : Low latency
         vlc_args = [
             "--no-xlib",
             "--network-caching=300",
             "--rtsp-tcp",
             "--clock-jitter=0",
+            "--aspect-ratio=16:9", 
             "--quiet"
         ]
         self.vlc_instance = vlc.Instance(*vlc_args)
         
         # --- UI Layout ---
         self.cells = []
-        self.setup_grid()
+        # Main container for the grid
+        self.grid_container = tk.Frame(self.root, bg="black")
+        self.grid_container.pack(fill=tk.BOTH, expand=True)
+        
+        # Footer Info
+        self.info_label = tk.Label(self.root, text="System Ready", bg="#111", fg="#888", font=("Arial", 10))
+        self.info_label.pack(side=tk.BOTTOM, fill=tk.X)
+
+        # Initial Grid Setup
+        self.setup_grid_layout()
         
         # --- Bindings ---
         self.root.bind("<Control-Alt-s>", self.open_admin_panel)
         self.root.bind("<Escape>", self.on_close)
         
         # --- Startup Logic ---
-        # If no cameras are configured, prompt admin panel immediately
         if not self.active_cam_list:
+            # Force Admin Panel if no cameras configured
             self.root.after(1000, lambda: self.open_admin_panel(force=True))
         else:
             self.start_tour()
@@ -175,25 +189,6 @@ class SmartNVRTourApp:
         
         # Periodic UI Tasks
         self.enforce_kiosk_mode()
-
-    def setup_grid(self):
-        """Creates the 2x2 grid layout."""
-        container = tk.Frame(self.root, bg="black")
-        container.pack(fill=tk.BOTH, expand=True)
-        
-        # 2x2 Weights
-        container.columnconfigure(0, weight=1); container.columnconfigure(1, weight=1)
-        container.rowconfigure(0, weight=1); container.rowconfigure(1, weight=1)
-        
-        for row in range(2):
-            for col in range(2):
-                cell = CameraCell(container, self.vlc_instance)
-                cell.frame.grid(row=row, column=col, sticky="nsew", padx=1, pady=1)
-                self.cells.append(cell)
-                
-        # Footer Info
-        self.info_label = tk.Label(self.root, text="System Ready", bg="#111", fg="#888", font=("Arial", 10))
-        self.info_label.pack(side=tk.BOTTOM, fill=tk.X)
 
     def load_config(self):
         if not os.path.exists(CONFIG_FILE):
@@ -227,27 +222,74 @@ class SmartNVRTourApp:
         self.root.after(5000, self.enforce_kiosk_mode)
 
     def build_rtsp_url(self, channel_id):
+        # Uses 'subtype' from config
+        subtype = self.config.get('subtype', '1')
         return (f"rtsp://{self.config['nvr_user']}:{self.config['nvr_pass']}@"
                 f"{self.config['nvr_ip']}:{self.config['nvr_port']}/"
-                f"cam/realmonitor?channel={channel_id}&subtype={self.config['subtype']}")
+                f"cam/realmonitor?channel={channel_id}&subtype={subtype}")
+
+    # --- Grid Management ---
+    def setup_grid_layout(self):
+        """
+        Dynamically creates the grid based on 'grid_size' config.
+        Supported sizes: 4, 6, 8, 9, 16
+        """
+        # Clear existing cells
+        for cell in self.cells:
+            cell.stop()
+            cell.frame.destroy()
+        self.cells = []
+        
+        target_size = int(self.config.get("grid_size", 4))
+        
+        # Determine Rows x Cols
+        if target_size == 4:
+            rows, cols = 2, 2
+        elif target_size == 6:
+            rows, cols = 2, 3
+        elif target_size == 8:
+            # 2x4 is too wide (aspect ratio bad). 3x3 is better (leaving 1 empty).
+            rows, cols = 3, 3 
+        elif target_size == 9:
+            rows, cols = 3, 3
+        elif target_size == 16:
+            rows, cols = 4, 4
+        else:
+            rows, cols = 2, 2 # Fallback
+            
+        # Configure Grid Weights
+        for r in range(rows):
+            self.grid_container.rowconfigure(r, weight=1)
+        for c in range(cols):
+            self.grid_container.columnconfigure(c, weight=1)
+            
+        # Create Cells
+        for r in range(rows):
+            for c in range(cols):
+                cell = CameraCell(self.grid_container, self.vlc_instance)
+                cell.frame.grid(row=r, column=c, sticky="nsew", padx=1, pady=1)
+                self.cells.append(cell)
+        
+        self.cells_per_page = len(self.cells)
 
     # --- Tour Logic ---
     def start_tour(self):
         self.tour_active = True
-        self.update_grid()
+        self.update_grid_content()
 
-    def update_grid(self):
-        """Cycles to the next 4 cameras."""
+    def update_grid_content(self):
+        """Loads cameras into the current grid layout."""
         if not self.tour_active or not self.active_cam_list: return
 
         total_cams = len(self.active_cam_list)
-        cameras_per_page = 4
-        start_idx = self.current_page_index * cameras_per_page
-        current_batch = self.active_cam_list[start_idx : start_idx + cameras_per_page]
+        limit = self.cells_per_page
+        
+        start_idx = self.current_page_index * limit
+        current_batch = self.active_cam_list[start_idx : start_idx + limit]
         
         # Update Info Footer
         page_num = self.current_page_index + 1
-        total_pages = math.ceil(total_cams / cameras_per_page)
+        total_pages = math.ceil(total_cams / limit)
         self.info_label.config(text=f"Page {page_num}/{total_pages} | Cams: {current_batch} | Interval: {self.config['tour_interval']}s")
 
         for i, cell in enumerate(self.cells):
@@ -257,7 +299,7 @@ class SmartNVRTourApp:
                 cell.play(url, cam_id)
             else:
                 cell.stop()
-                cell.status_label.config(text="EMPTY SLOT", fg="gray")
+                cell.status_label.config(text="EMPTY", fg="#333")
                 cell.status_label.lift()
 
         # Schedule next
@@ -266,11 +308,11 @@ class SmartNVRTourApp:
 
     def next_page(self):
         if not self.active_cam_list: return
-        total_pages = math.ceil(len(self.active_cam_list) / 4)
+        total_pages = math.ceil(len(self.active_cam_list) / self.cells_per_page)
         self.current_page_index += 1
         if self.current_page_index >= total_pages:
             self.current_page_index = 0
-        self.update_grid()
+        self.update_grid_content()
 
     def monitor_loop(self):
         """Watchdog for cell health."""
@@ -279,13 +321,11 @@ class SmartNVRTourApp:
             time.sleep(2)
 
     # ==========================================
-    # ADMIN DASHBOARD & PREVIEW
+    # ADMIN DASHBOARD
     # ==========================================
     def open_admin_panel(self, event=None, force=False):
         self.root.config(cursor="arrow")
         
-        # If forced (startup), don't ask for password immediately if you prefer, 
-        # but standard security implies we should.
         pwd = simpledialog.askstring("Admin", "Enter Admin Password:", parent=self.root, show='*')
         
         if pwd == self.config["admin_pass"]:
@@ -299,12 +339,11 @@ class SmartNVRTourApp:
     def show_dashboard(self):
         dash = Toplevel(self.root)
         dash.title("System Configuration")
-        dash.geometry("900x700")
+        dash.geometry("900x750")
         dash.configure(bg="#1a1a1a")
         dash.attributes('-topmost', True)
         
         def on_close():
-            # Stop preview player if running
             if hasattr(dash, 'preview_player') and dash.preview_player:
                 dash.preview_player.stop()
             self.root.config(cursor="none")
@@ -330,7 +369,6 @@ class SmartNVRTourApp:
 
         def get_ping_ms():
             try:
-                # Check latency to NVR
                 res = subprocess.run(["ping", "-c", "1", "-W", "1", self.config['nvr_ip']], 
                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
                 if res.returncode == 0:
@@ -364,7 +402,7 @@ class SmartNVRTourApp:
         # ====================
         # MIDDLE: CONFIGURATION
         # ====================
-        lbl_conf = LabelFrame(col_mid, text=" Connection Settings ", bg="#1a1a1a", fg="#00ccff", font=("Arial", 10, "bold"))
+        lbl_conf = LabelFrame(col_mid, text=" Settings ", bg="#1a1a1a", fg="#00ccff", font=("Arial", 10, "bold"))
         lbl_conf.pack(fill=tk.X, pady=(0, 20))
         
         entries = {}
@@ -381,6 +419,24 @@ class SmartNVRTourApp:
             e.grid(row=i, column=1, sticky="ew", padx=5)
             entries[key] = e
 
+        # -- Grid Size Selector --
+        Label(lbl_conf, text="Grid Size", bg="#1a1a1a", fg="white").grid(row=len(fields), column=0, sticky="e", padx=5, pady=5)
+        grid_var = StringVar(dash)
+        grid_var.set(str(self.config.get("grid_size", 4)))
+        grid_menu = OptionMenu(lbl_conf, grid_var, "4", "6", "8", "9", "16")
+        grid_menu.config(bg="#333", fg="white", highlightthickness=0)
+        grid_menu.grid(row=len(fields), column=1, sticky="ew", padx=5)
+
+        # -- Substream Toggle --
+        Label(lbl_conf, text="Stream Quality", bg="#1a1a1a", fg="white").grid(row=len(fields)+1, column=0, sticky="e", padx=5, pady=5)
+        sub_var = StringVar(dash)
+        # 1=Sub, 0=Main
+        current_sub = self.config.get("subtype", "1")
+        sub_var.set("Sub Stream (Fast)" if str(current_sub) == "1" else "Main Stream (HD)")
+        sub_menu = OptionMenu(lbl_conf, sub_var, "Main Stream (HD)", "Sub Stream (Fast)")
+        sub_menu.config(bg="#333", fg="white", highlightthickness=0)
+        sub_menu.grid(row=len(fields)+1, column=1, sticky="ew", padx=5)
+
         # ====================
         # RIGHT: CAM SELECTOR & PREVIEW
         # ====================
@@ -395,7 +451,6 @@ class SmartNVRTourApp:
         preview_label = Label(preview_frame, text="Select a camera\nto preview", bg="black", fg="gray")
         preview_label.place(relx=0.5, rely=0.5, anchor="center")
 
-        # Setup separate VLC for preview
         dash.preview_player = self.vlc_instance.media_player_new()
         if sys.platform.startswith('linux'):
             dash.preview_player.set_xwindow(preview_frame.winfo_id())
@@ -403,13 +458,11 @@ class SmartNVRTourApp:
             dash.preview_player.set_hwnd(preview_frame.winfo_id())
 
         def show_preview(cam_id):
-            """Plays selected camera in small frame."""
-            # Update Settings from inputs first so we use correct credentials
             user = entries['nvr_user'].get()
             pwd = entries['nvr_pass'].get()
             ip = entries['nvr_ip'].get()
             port = entries['nvr_port'].get()
-            
+            # Always use substream (1) for preview to be fast
             url = f"rtsp://{user}:{pwd}@{ip}:{port}/cam/realmonitor?channel={cam_id}&subtype=1"
             
             dash.preview_player.stop()
@@ -425,20 +478,15 @@ class SmartNVRTourApp:
         chk_vars = {}
         current_active = self.config.get("active_cameras", [])
         
-        # Grid 4x8
         for i in range(1, 33):
             var = IntVar(value=1 if i in current_active else 0)
             chk_vars[i] = var
             
-            # Using Button that acts as Checkbox + Preview Trigger
             def on_cam_click(c=i, v=var):
-                # Toggle variable
                 v.set(1 if v.get() == 0 else 0)
-                # Update visual state
                 btn = buttons[c]
                 if v.get(): btn.config(bg="#00aa00", relief="sunken")
                 else: btn.config(bg="#444", relief="raised")
-                # Trigger Preview
                 show_preview(c)
 
             btn = Button(lbl_cams, text=f"{i}", bg="#00aa00" if i in current_active else "#444",
@@ -448,14 +496,13 @@ class SmartNVRTourApp:
             col = (i-1) % 4
             btn.grid(row=row, column=col, padx=2, pady=2)
             
-            # Save reference to update style
             if not hasattr(dash, 'cam_buttons'): dash.cam_buttons = {}
             buttons = dash.cam_buttons
             buttons[i] = btn
 
         # --- Footer Actions ---
         def save_and_restart():
-            # Save Config Inputs
+            # Save Text Inputs
             for k, e in entries.items():
                 val = e.get()
                 if k == "tour_interval":
@@ -463,18 +510,27 @@ class SmartNVRTourApp:
                     except: val = 10
                 self.config[k] = val
             
+            # Save Grid Size
+            try: self.config["grid_size"] = int(grid_var.get())
+            except: self.config["grid_size"] = 4
+            
+            # Save Subtype
+            sel_sub = sub_var.get()
+            self.config["subtype"] = "1" if "Sub" in sel_sub else "0"
+
             # Save Active Cams
             new_active = [c for c, v in chk_vars.items() if v.get() == 1]
             self.config["active_cameras"] = new_active
             self.active_cam_list = sorted(new_active)
             
             self.save_config()
-            messagebox.showinfo("Saved", "Configuration updated.\nSystem will restart tour.")
+            messagebox.showinfo("Saved", "Configuration updated.\nSystem will restart layout.")
             on_close()
             
-            # Restart Logic
+            # Re-init Grid Layout and restart
             self.current_page_index = 0
-            self.update_grid()
+            self.setup_grid_layout() # Rebuilds cells based on new grid size
+            self.update_grid_content()
 
         btn_frame = Frame(dash, bg="#1a1a1a")
         btn_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=10)
