@@ -1,52 +1,120 @@
 #!/bin/bash
 
-# RPi Smart NVR Viewer - Auto Installer
-# -------------------------------------
+# ==============================================================================
+# RPi Smart NVR Viewer - Professional Installer
+# ==============================================================================
+# This script sets up the environment, installs dependencies in a virtual env,
+# configures GPU memory, and sets up the application to auto-start on boot.
+# ==============================================================================
 
-echo ">>> Starting Installation..."
+# Ensure the script stops on errors
+set -e
 
-# 1. Update Repository
-echo "[1/5] Updating package lists..."
+echo ""
+echo ">>> Starting Smart NVR Viewer Installation..."
+echo "---------------------------------------------"
+
+# 1. Update System Repositories
+# -----------------------------
+echo "[1/7] Updating package lists..."
 sudo apt-get update -y
 
-# 2. Install System Dependencies
-# vlc: The media player engine
-# libvlc-dev: Development headers
-# python3-tk: GUI framework
-# xscreensaver: To manage screen blanking easily
-echo "[2/5] Installing system libraries..."
-sudo apt-get install -y vlc libvlc-dev python3-tk python3-pip xscreensaver
+# 2. Install System-Level Dependencies
+# ------------------------------------
+# vlc: The core media player engine
+# libvlc-dev: Development headers required for python-vlc bindings
+# python3-tk: The GUI framework (Tkinter)
+# python3-venv: Required to create isolated Python environments (Fixes PEP 668 error)
+# xscreensaver: Utility to easily disable screen blanking/sleep
+echo "[2/7] Installing system libraries..."
+sudo apt-get install -y vlc libvlc-dev python3-tk python3-pip python3-venv xscreensaver
 
-# 3. Install Python Libraries
-echo "[3/5] Installing Python requirements..."
-pip3 install -r requirements.txt
-
-# 4. Configure GPU Memory (Split)
-# Raspberry Pi needs more GPU RAM to decode video smoothly.
-# We check if 'raspi-config' exists and set memory to 256MB.
-echo "[4/5] Optimizing GPU Memory..."
-if command -v raspi-config > /dev/null; then
-    sudo raspi-config nonint do_memory_split 256
-    echo "    GPU Memory set to 256MB."
+# 3. Create Python Virtual Environment (VENV)
+# -------------------------------------------
+# This creates a folder named 'venv' in the current directory.
+# All Python packages will be installed here, isolating them from the system.
+echo "[3/7] Setting up Python Virtual Environment..."
+if [ ! -d "venv" ]; then
+    python3 -m venv venv
+    echo "    > Virtual environment created successfully in ./venv"
 else
-    echo "    Warning: 'raspi-config' not found. Ensure GPU memory is at least 128MB manually."
+    echo "    > Virtual environment already exists. Skipping creation."
 fi
 
-# 5. Create Autostart Entry
-# This ensures the app runs automatically when the Desktop loads.
-echo "[5/5] Setting up Autostart..."
+# 4. Install Python Libraries inside VENV
+# ---------------------------------------
+# We explicitly call the 'pip' executable located INSIDE the venv folder.
+echo "[4/7] Installing Python requirements into VENV..."
+if [ -f "requirements.txt" ]; then
+    ./venv/bin/pip install --upgrade pip
+    ./venv/bin/pip install -r requirements.txt
+    echo "    > Python dependencies installed successfully."
+else
+    echo "    ! ERROR: requirements.txt not found!"
+    exit 1
+fi
+
+# 5. Configure Raspberry Pi GPU Memory
+# ------------------------------------
+# Increases GPU memory to 256MB to handle video decoding smoothly.
+echo "[5/7] Optimizing GPU Memory Split..."
+if command -v raspi-config > /dev/null; then
+    # 'nonint' allows running raspi-config without user interaction
+    sudo raspi-config nonint do_memory_split 256
+    echo "    > GPU Memory set to 256MB."
+else
+    echo "    ! Warning: 'raspi-config' not found. Ensure GPU memory is set to at least 128MB manually."
+fi
+
+# 6. Disable Screen Blanking (Optional but Recommended)
+# ---------------------------------------------------
+# Attempts to modify LXDE autostart to prevent the screen from going black.
+echo "[6/7] Disabling Screen Blanking (Sleep Mode)..."
+AUTOSTART_PATH="/etc/xdg/lxsession/LXDE-pi/autostart"
+if [ -f "$AUTOSTART_PATH" ]; then
+    # Grep checks if the line exists, if not, it appends it.
+    grep -q "@xset s off" "$AUTOSTART_PATH" || sudo bash -c "echo '@xset s off' >> $AUTOSTART_PATH"
+    grep -q "@xset -dpms" "$AUTOSTART_PATH" || sudo bash -c "echo '@xset -dpms' >> $AUTOSTART_PATH"
+    grep -q "@xset s noblank" "$AUTOSTART_PATH" || sudo bash -c "echo '@xset s noblank' >> $AUTOSTART_PATH"
+    echo "    > Screen blanking disabled in LXDE settings."
+else
+    echo "    > LXDE autostart file not found. Skipping global screen config (App will handle it locally)."
+fi
+
+# 7. Create Autostart Entry
+# -------------------------
+# Creates a .desktop file that tells the OS to run our app on boot.
+# CRITICAL: It uses the absolute path to the VENV python interpreter.
+echo "[7/7] Configuring Autostart..."
 mkdir -p /home/$USER/.config/autostart
+
+# Get absolute paths
+APP_DIR=$(pwd)
+VENV_PYTHON="$APP_DIR/venv/bin/python"
+MAIN_SCRIPT="$APP_DIR/main.py"
+
+# Write the .desktop file
 cat <<EOF > /home/$USER/.config/autostart/nvr-viewer.desktop
 [Desktop Entry]
 Type=Application
 Name=Smart NVR Viewer
-Exec=python3 $(pwd)/main.py
+Comment=Auto-start NVR Viewer in Kiosk Mode
+Exec=$VENV_PYTHON $MAIN_SCRIPT
+WorkingDirectory=$APP_DIR
 StartupNotify=false
 Terminal=false
+X-KeepSoftware=true
 EOF
 
-echo "------------------------------------------------"
-echo "Installation Complete!"
-echo "Please REBOOT your Raspberry Pi to apply changes."
+echo "    > Autostart entry created at /home/$USER/.config/autostart/nvr-viewer.desktop"
+
+echo ""
+echo "========================================================"
+echo "   INSTALLATION COMPLETE SUCCESSFULL!"
+echo "========================================================"
+echo "1. Your Python environment is set up in './venv'"
+echo "2. The app is configured to start automatically on boot."
+echo ""
+echo "IMPORTANT: Please REBOOT your Raspberry Pi now."
 echo "Command: sudo reboot"
-echo "------------------------------------------------"
+echo "========================================================"
