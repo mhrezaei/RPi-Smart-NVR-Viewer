@@ -1,0 +1,11 @@
+{
+    "nvr_ip": "192.168.1.108",
+    "nvr_port": "554",
+    "nvr_user": "view",
+    "nvr_pass": "viewer123456",
+    "channel": "0",
+    "subtype": "0",
+    "admin_pass": "admin",
+    "ping_interval": 5,
+    "network_caching": 600
+}
