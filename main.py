@@ -5,7 +5,7 @@ Smart NVR Viewer for Raspberry Pi
 A robust, kiosk-mode RTSP stream viewer designed for 24/7 monitoring.
 Features include auto-reconnection, health monitoring, and a hidden admin dashboard.
 
-Author: Mohammad Hadi Rezaei
+Author: Your Name
 License: MIT
 """
 
@@ -19,13 +19,27 @@ import tkinter as tk
 from tkinter import simpledialog, messagebox, Toplevel, Label, Entry, Button
 from datetime import datetime
 
-# Third-party libraries
+# ==========================================
+# DEPENDENCY CHECK & GUI ERROR HANDLING
+# ==========================================
+# We wrap imports in a try-block to catch 'externally-managed-environment' issues
+# or missing venv activations, displaying a visible error on the screen.
 try:
     import vlc
     import psutil
-except ImportError:
-    print("Error: Required libraries not found.")
-    print("Please run: pip3 install python-vlc psutil")
+except ImportError as e:
+    # Initialize a minimal Tkinter instance just to show the error
+    root = tk.Tk()
+    root.withdraw() # Hide the main window
+    error_msg = (
+        f"CRITICAL ERROR: Missing Dependencies.\n\n"
+        f"Python could not find required libraries (vlc, psutil).\n"
+        f"Details: {e}\n\n"
+        f"SOLUTION:\n"
+        f"This app requires a Virtual Environment (venv) on newer Raspberry Pi OS.\n"
+        f"Please run the 'setup.sh' script again to fix this."
+    )
+    messagebox.showerror("Startup Error", error_msg)
     sys.exit(1)
 
 # ==========================================
