@@ -54,16 +54,33 @@ else
     exit 1
 fi
 
-# 5. Configure Raspberry Pi GPU Memory
-# ------------------------------------
-# Increases GPU memory to 256MB to handle video decoding smoothly.
+# 5. Configure Raspberry Pi GPU Memory (Direct File Edit)
+# -----------------------------------------------------
+# Instead of relying on raspi-config (which changes between versions),
+# we edit config.txt directly.
 echo "[5/7] Optimizing GPU Memory Split..."
-if command -v raspi-config > /dev/null; then
-    # 'nonint' allows running raspi-config without user interaction
-    sudo raspi-config nonint do_memory_split 256
-    echo "    > GPU Memory set to 256MB."
+
+# Detect config.txt location (It changed in newer RPi OS versions)
+CONFIG_TXT=""
+if [ -f "/boot/firmware/config.txt" ]; then
+    CONFIG_TXT="/boot/firmware/config.txt"
+elif [ -f "/boot/config.txt" ]; then
+    CONFIG_TXT="/boot/config.txt"
+fi
+
+if [ -n "$CONFIG_TXT" ]; then
+    # Check if gpu_mem is already defined
+    if grep -q "^gpu_mem=" "$CONFIG_TXT"; then
+        # Replace existing value
+        sudo sed -i 's/^gpu_mem=.*/gpu_mem=256/' "$CONFIG_TXT"
+        echo "    > Updated existing gpu_mem to 256MB in $CONFIG_TXT"
+    else
+        # Append new value
+        echo "gpu_mem=256" | sudo tee -a "$CONFIG_TXT" > /dev/null
+        echo "    > Added gpu_mem=256MB to $CONFIG_TXT"
+    fi
 else
-    echo "    ! Warning: 'raspi-config' not found. Ensure GPU memory is set to at least 128MB manually."
+    echo "    ! Warning: Could not find config.txt. Please set GPU memory to 256MB manually via raspi-config."
 fi
 
 # 6. Disable Screen Blanking (Optional but Recommended)
